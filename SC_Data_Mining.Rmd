@@ -1,0 +1,133 @@
+---
+title: "StarCraft Data Mining"
+author: "Ben Weber"
+date: "July 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(caret)
+library(caTools) 
+library(Matrix)
+library(reshape2)
+library(ggplot2)
+library(Ckmeans.1d.dp)
+library(xgboost) 
+library(nnet)
+library(class)
+library(rpart)  
+```
+  
+## Strategy Prediction 
+
+The first chart shows the results for predicting Protoss build orders at different times during the game.  
+It's an attempt at reproducing Figure 4 in my IEEEE [CIG 2009 paper](https://github.com/bgweber/StarCraftMining/raw/master/Weber_CIG_2009.pdf). I applied classifiers from the following packages: nearest neighbor (`class`), decision tree (`rpart`), neural networks (`nnet`), and `xgboost`. 
+
+```{r, echo=FALSE,  message=FALSE, warning=FALSE, comment=FALSE, fig.width=10, fig.height=5.5}
+
+# load the data set 
+df <- read.csv("https://github.com/bgweber/StarCraftMining/raw/master/data/scmPvT_Protoss_Mid.csv") 
+
+# translate the labels form factors to numberic (for xgboost) 
+df$label <- as.numeric(df$midBuild) - 1
+df$midBuild <- NULL   
+
+# prediction results 
+results <- NULL 
+
+# Simulate different time steps  
+for (frame in seq(17280, 0, -360)) {
+
+  # Filter to a speicfic time 
+  for (i in colnames(df)) {
+    if (i != 'label') {
+      index <- df[i] > frame 
+      df[i][index] <- 0
+    }
+  }
+
+  # split into training and testing data sets 
+  split <- sample.split(df$label, SplitRatio = 0.75)
+  train <- subset(df, split == TRUE)
+  test <- subset(df, split == FALSE) 
+
+  # xgboost prediction 
+  trainM <- sparse.model.matrix(label ~ ., data = train)
+  testM <- sparse.model.matrix(label ~ ., data = test) 
+  bst <- xgboost(data = trainM, label = train$label, max_depth = 5, eta = 0.3, nthread = 8, nrounds = 10, objective = "multi:softmax", verbose = 0, num_class = 8) 
+  predict <- predict(bst, testM)    
+  xgboostAccuracy <- confusionMatrix(factor(predict), factor(test$label), mode = "everything")$overall['Accuracy'][[1]]  
+  
+  # knn prediction 
+  labels <- test$label 
+  test$label <- 0
+  predict <- knn(train, test, train$label, use.all = FALSE)
+  test$label <- labels 
+  knnAccuracy <- confusionMatrix(factor(predict), factor(test$label), mode = "everything")$overall['Accuracy'][[1]] 
+  confusionMatrix(factor(predict), factor(test$label), mode = "everything")
+  
+  # logistic prediction 
+  reg <- nnet::multinom(label ~ ., data=train, trace = FALSE)
+  predict <- predict(reg, test) 
+  nnAccuracy <- confusionMatrix(factor(predict), factor(test$label), mode = "everything")$overall['Accuracy'][[1]] 
+
+  # decision tree prediction 
+  model<- rpart(factor(label) ~ ., data = train)
+  predict <- predict(model, test, type="class")  
+  rpartAccuracy <- confusionMatrix(factor(predict), factor(test$label), mode = "everything")$overall['Accuracy'][[1]] 
+  
+  # save the results    
+  record <- data.frame(minutes = frame/24/60.0, xgboost = xgboostAccuracy,  
+                       knn = knnAccuracy, neural_network = nnAccuracy, decision_tree = rpartAccuracy)  
+  
+  # append the row to the front of the data frame 
+  if (is.null(results)) {
+    results <- record 
+  }  else {
+    results <- rbind(record, results)
+  }  
+}   
+
+# plot and save the results 
+ggplot(data=melt(results, id="minutes"), aes(x=minutes, y=value, colour=variable)) + geom_line() + 
+  scale_x_continuous(breaks=seq(0,12,2)) + 
+  labs(title = "Prediction Results for Protoss vs. Terran", x = "Game Time (Minutes)", y = "Accuracy of Strategy Prediction", color = "Algorithm\n")
+```
+
+To compare the accuracy of `xgboost` with my prior results, I've also included the raw data for the chart: 
+
+```{r, echo=FALSE}  
+print(results[seq(1, 49, 4), ], row.names = FALSE)
+```
+
+## Feature Importance 
+
+The second chart shows the importance of different features for predicting build orders at 8 minutes into the game, based on the xgboost model. This type of analysis was not covered in the original paper. 
+
+```{r, echo=FALSE}
+
+# load the data set 
+df <- read.csv("https://github.com/bgweber/StarCraftMining/raw/master/data/scmPvT_Protoss_Mid.csv")   
+df$label <- as.numeric(df$midBuild) - 1
+df$midBuild <- NULL   
+
+# simulate 8 minutes intp the game 
+frame <- 8*60*24
+for (i in colnames(df)) {
+  if (i != 'label') {
+    index <- df[i] > frame 
+    df[i][index] <- 0
+  }   
+}
+
+# train the xgboost model 
+split <- sample.split(df$label, SplitRatio = 0.75)
+train <- subset(df, split == TRUE)
+trainM <- sparse.model.matrix(label ~ ., data = train)
+bst <- xgboost(data = trainM, label = train$label, max_depth = 5, eta = 0.3, nthread = 8, nrounds = 10, objective = "multi:softmax", verbose = 0, num_class = 8) 
+
+# plot and save feature importance 
+importance <- xgb.importance(feature_names = colnames(trainM), model = bst)
+xgb.plot.importance(importance_matrix = importance, top_n = 12)  
+```
+ 
