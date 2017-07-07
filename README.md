@@ -1,8 +1,4 @@
 # StarCraftMining
 Data and scripts for predicting build-orders in StarCraft: Brood War
 
-Add link to paper
-
-link to RMD script
-
-link to blog post. 
+[https://medium.com/@bgweber/reproducible-research-starcraft-mining-ea140d6789b9](Blog Post)
