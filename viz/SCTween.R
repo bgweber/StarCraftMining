@@ -9,9 +9,6 @@ library(dplyr)
 fps <- 24
 nframes <- 5000
 
-#replayTime <- 48
-#nframes <- 48
-
 # load the replay data 
 df <- read.csv("PvT.csv")
 
